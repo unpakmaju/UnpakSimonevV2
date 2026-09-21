@@ -27,7 +27,7 @@ func (r *LdapRepository) Connect() (*ldap.Conn, error) {
 	adPass := os.Getenv("AD_PASS")
 
 	tlsConfig := &tls.Config{InsecureSkipVerify: true}
-	dialer := &net.Dialer{Timeout: 3 * time.Second}
+	dialer := &net.Dialer{Timeout: 5 * time.Minute}
 
 	var conn *ldap.Conn
 	var err error
