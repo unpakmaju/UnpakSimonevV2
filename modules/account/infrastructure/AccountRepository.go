@@ -883,7 +883,7 @@ func (r *AccountRepository) Update(
 	ctx context.Context,
 	account *domain.Account,
 ) error {
-	return r.db.WithContext(ctx).
+	return r.db.WithContext(ctx).Debug().
 		Save(account).Error
 }
 
