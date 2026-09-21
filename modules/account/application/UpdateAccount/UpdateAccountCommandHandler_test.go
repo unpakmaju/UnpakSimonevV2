@@ -19,7 +19,8 @@ func TestUpdateAccountCommandHandler_Handle(t *testing.T) {
 
 	t.Run("Success", func(t *testing.T) {
 		existingAccount := &domainaccount.Account{
-			UUID: validUUID,
+			UUID:     validUUID,
+			Password: helper.StrPtr("oldpassword"),
 		}
 
 		repo := &mockrepo.MockAccountRepository{
@@ -29,6 +30,7 @@ func TestUpdateAccountCommandHandler_Handle(t *testing.T) {
 			},
 			UpdateFunc: func(ctx context.Context, account *domainaccount.Account) error {
 				assert.Equal(t, "updated-user", *account.Username)
+				assert.Equal(t, "newpassword", *account.Password)
 				return nil
 			},
 		}

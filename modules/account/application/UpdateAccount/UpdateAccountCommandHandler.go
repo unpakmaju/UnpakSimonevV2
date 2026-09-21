@@ -47,7 +47,7 @@ func (h *UpdateAccountCommandHandler) Handle(
 		existingAccount,
 		uuidAccount,
 		cmd.Username,
-		existingAccount.Password,
+		cmd.Password,
 		cmd.Level,
 		cmd.Name,
 		cmd.Email,

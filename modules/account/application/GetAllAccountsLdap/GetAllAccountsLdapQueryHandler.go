@@ -27,9 +27,6 @@ func (h *GetAllAccountsLdapQueryHandler) Handle(
 			"adm_simonev_prodi",
 			"adm_simonev_fakultas",
 			"adm_simonev",
-			"adm_pusat",
-			"admin",
-			"superadmin",
 		}
 	}
 
