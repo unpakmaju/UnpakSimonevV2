@@ -31,7 +31,7 @@ func (h *SaveBulkKuesionerJawabanCommandHandler) Handle(
 	cmd SaveBulkKuesionerJawabanCommand,
 ) (string, error) {
 
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
 	if len(cmd.Items) == 0 {
@@ -59,17 +59,22 @@ func (h *SaveBulkKuesionerJawabanCommandHandler) Handle(
 		SelectedMap  map[uint]bool
 	}
 
-	processedItems := make([]ProcessedItem, 0, len(cmd.Items))
+	type rawItemData struct {
+		pertanyaanUUID uuid.UUID
+		raw            []JawabanPayload
+		selectedUUIDs  []string
+		freeTexts      []string
+		freeTextMap    map[string]string
+	}
+
+	var allSelectedUUIDs []string
+	selectedUUIDSet := make(map[string]struct{})
+	rawItems := make([]rawItemData, 0, len(cmd.Items))
 
 	for _, item := range cmd.Items {
 		pertanyaanUUID, err := uuid.Parse(item.UuidPertanyaan)
 		if err != nil {
 			continue // skip invalid pertanyaan UUID
-		}
-
-		pertanyaan, err := h.RepoPertanyaan.GetByUuid(ctx, pertanyaanUUID)
-		if err != nil {
-			continue
 		}
 
 		var raw []JawabanPayload
@@ -79,12 +84,16 @@ func (h *SaveBulkKuesionerJawabanCommandHandler) Handle(
 
 		var selectedUUIDs []string
 		var freeTexts []string
-		freeTextMap := map[string]string{}
+		freeTextMap := make(map[string]string)
 
 		for _, p := range raw {
 			if p.UUID != "" {
 				if _, err := uuid.Parse(p.UUID); err == nil {
 					selectedUUIDs = append(selectedUUIDs, p.UUID)
+					if _, exists := selectedUUIDSet[p.UUID]; !exists {
+						selectedUUIDSet[p.UUID] = struct{}{}
+						allSelectedUUIDs = append(allSelectedUUIDs, p.UUID)
+					}
 				}
 			}
 			if p.FreeText != "" {
@@ -95,12 +104,55 @@ func (h *SaveBulkKuesionerJawabanCommandHandler) Handle(
 			}
 		}
 
-		jawabanList, err := h.RepoJawaban.GetByUUIDs(ctx, selectedUUIDs)
+		rawItems = append(rawItems, rawItemData{
+			pertanyaanUUID: pertanyaanUUID,
+			raw:            raw,
+			selectedUUIDs:  selectedUUIDs,
+			freeTexts:      freeTexts,
+			freeTextMap:    freeTextMap,
+		})
+	}
+
+	// Batch lookup jawaban across all items
+	jawabanLookup := make(map[string]domainjawaban.TemplateJawaban)
+	if len(allSelectedUUIDs) > 0 {
+		if batchJawaban, err := h.RepoJawaban.GetByUUIDs(ctx, allSelectedUUIDs); err == nil {
+			for _, j := range batchJawaban {
+				jawabanLookup[j.UUID.String()] = j
+			}
+		}
+	}
+
+	processedItems := make([]ProcessedItem, 0, len(rawItems))
+	for _, rawItem := range rawItems {
+		pertanyaan, err := h.RepoPertanyaan.GetByUuid(ctx, rawItem.pertanyaanUUID)
 		if err != nil {
 			continue
 		}
 
-		selectedMap := map[uint]bool{}
+		var jawabanList []domainjawaban.TemplateJawaban
+		if len(rawItem.selectedUUIDs) > 0 {
+			allFound := true
+			for _, u := range rawItem.selectedUUIDs {
+				if _, ok := jawabanLookup[u]; !ok {
+					allFound = false
+					break
+				}
+			}
+			if allFound {
+				for _, u := range rawItem.selectedUUIDs {
+					jawabanList = append(jawabanList, jawabanLookup[u])
+				}
+			} else {
+				var err error
+				jawabanList, err = h.RepoJawaban.GetByUUIDs(ctx, rawItem.selectedUUIDs)
+				if err != nil {
+					continue
+				}
+			}
+		}
+
+		selectedMap := make(map[uint]bool, len(jawabanList))
 		for _, j := range jawabanList {
 			selectedMap[j.ID] = true
 		}
@@ -111,8 +163,8 @@ func (h *SaveBulkKuesionerJawabanCommandHandler) Handle(
 			Pertanyaan:   pertanyaan,
 			JawabanList:  jawabanList,
 			FreeTemplate: freeTemplate,
-			FreeTexts:    freeTexts,
-			FreeTextMap:  freeTextMap,
+			FreeTexts:    rawItem.freeTexts,
+			FreeTextMap:  rawItem.freeTextMap,
 			SelectedMap:  selectedMap,
 		})
 	}
@@ -143,11 +195,19 @@ func (h *SaveBulkKuesionerJawabanCommandHandler) Handle(
 
 	repoWithTx := h.RepoJawabanKuesioner.WithTx(tx)
 
+	// Fetch all existing answers for this questionnaire and user in ONE query!
+	allExisting, err := repoWithTx.GetByKuesionerAndUser(ctx, kuesioner.ID, cmd.SID, cmd.Resource)
+	if err != nil {
+		return "", err
+	}
+
+	existingByPertanyaan := make(map[uint][]domainkuesioner.KuesionerJawaban)
+	for _, v := range allExisting {
+		existingByPertanyaan[v.IdTemplatePertanyaan] = append(existingByPertanyaan[v.IdTemplatePertanyaan], v)
+	}
+
 	for _, item := range processedItems {
-		existing, err := repoWithTx.GetByPertanyaanAndUser(ctx, item.Pertanyaan.ID, cmd.SID, cmd.Resource)
-		if err != nil {
-			return "", err
-		}
+		existing := existingByPertanyaan[item.Pertanyaan.ID]
 
 		existingMap := map[uint]domainkuesioner.KuesionerJawaban{}
 		var existingFree []domainkuesioner.KuesionerJawaban

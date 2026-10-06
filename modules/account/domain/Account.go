@@ -31,6 +31,7 @@ func (Account) TableName() string {
 }
 
 // CREATE
+// [pr] perlu validasi total
 func NewAccount(
 	username string,
 	password string,

@@ -8,8 +8,15 @@ import (
 )
 
 type IKuesionerJawabanRepository interface {
+	GetByKuesionerAndUser(
+		ctx context.Context,
+		idKuesioner uint,
+		sid string,
+		resource string,
+	) ([]KuesionerJawaban, error)
 	GetByPertanyaanAndUser(
 		ctx context.Context,
+		idKuesioner uint,
 		pertanyaanID uint,
 		sid string,
 		resource string,

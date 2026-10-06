@@ -135,7 +135,7 @@ func (h *SaveKuesionerJawabanCommandHandler) Handle(
 	// ===============================
 	existing, err := h.RepoJawabanKuesioner.
 		WithTx(tx).
-		GetByPertanyaanAndUser(ctx, pertanyaan.ID, cmd.SID, cmd.Resource)
+		GetByPertanyaanAndUser(ctx, kuesioner.ID, pertanyaan.ID, cmd.SID, cmd.Resource)
 
 	if err != nil {
 		return "", err

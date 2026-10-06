@@ -35,8 +35,24 @@ func (r *KuesionerJawabanRepository) BeginTx(ctx context.Context) (*gorm.DB, err
 // ===============================
 // READ / WRITE
 // ===============================
+func (r *KuesionerJawabanRepository) GetByKuesionerAndUser(
+	ctx context.Context,
+	idKuesioner uint,
+	sid string,
+	resource string,
+) ([]domainkuesioner.KuesionerJawaban, error) {
+
+	var list []domainkuesioner.KuesionerJawaban
+	err := r.db.WithContext(ctx).
+		Where("id_kuesioner = ? AND createdByRef = ? AND createdBy = ?", idKuesioner, sid, resource).
+		Find(&list).Error
+
+	return list, err
+}
+
 func (r *KuesionerJawabanRepository) GetByPertanyaanAndUser(
 	ctx context.Context,
+	idKuesioner uint,
 	pertanyaanID uint,
 	sid string,
 	resource string,
@@ -44,7 +60,7 @@ func (r *KuesionerJawabanRepository) GetByPertanyaanAndUser(
 
 	var list []domainkuesioner.KuesionerJawaban
 	err := r.db.WithContext(ctx).
-		Where("id_template_pertanyaan = ? AND createdByRef = ? AND createdBy = ?", pertanyaanID, sid, resource).
+		Where("id_kuesioner = ? AND id_template_pertanyaan = ? AND createdByRef = ? AND createdBy = ?", idKuesioner, pertanyaanID, sid, resource).
 		Find(&list).Error
 
 	return list, err
