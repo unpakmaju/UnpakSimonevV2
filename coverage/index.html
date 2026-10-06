@@ -5149,6 +5149,7 @@ func (Account) TableName() string <span class="cov0" title="0">{
 }</span>
 
 // CREATE
+// [pr] perlu validasi total
 func NewAccount(
         username string,
         password string,
@@ -14653,7 +14654,7 @@ func (h *SaveBulkKuesionerJawabanCommandHandler) Handle(
         cmd SaveBulkKuesionerJawabanCommand,
 ) (string, error) <span class="cov0" title="0">{
 
-        ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+        ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
         defer cancel()
 
         if len(cmd.Items) == 0 </span><span class="cov0" title="0">{
@@ -14681,17 +14682,22 @@ func (h *SaveBulkKuesionerJawabanCommandHandler) Handle(
                 SelectedMap  map[uint]bool
         }
 
-        processedItems := make([]ProcessedItem, 0, len(cmd.Items))
+        type rawItemData struct {
+                pertanyaanUUID uuid.UUID
+                raw            []JawabanPayload
+                selectedUUIDs  []string
+                freeTexts      []string
+                freeTextMap    map[string]string
+        }
+
+        var allSelectedUUIDs []string
+        selectedUUIDSet := make(map[string]struct{})
+        rawItems := make([]rawItemData, 0, len(cmd.Items))
 
         for _, item := range cmd.Items </span><span class="cov0" title="0">{
                 pertanyaanUUID, err := uuid.Parse(item.UuidPertanyaan)
                 if err != nil </span><span class="cov0" title="0">{
                         continue</span> // skip invalid pertanyaan UUID
-                }
-
-                <span class="cov0" title="0">pertanyaan, err := h.RepoPertanyaan.GetByUuid(ctx, pertanyaanUUID)
-                if err != nil </span><span class="cov0" title="0">{
-                        continue</span>
                 }
 
                 <span class="cov0" title="0">var raw []JawabanPayload
@@ -14701,13 +14707,17 @@ func (h *SaveBulkKuesionerJawabanCommandHandler) Handle(
 
                 <span class="cov0" title="0">var selectedUUIDs []string
                 var freeTexts []string
-                freeTextMap := map[string]string{}
+                freeTextMap := make(map[string]string)
 
                 for _, p := range raw </span><span class="cov0" title="0">{
                         if p.UUID != "" </span><span class="cov0" title="0">{
                                 if _, err := uuid.Parse(p.UUID); err == nil </span><span class="cov0" title="0">{
                                         selectedUUIDs = append(selectedUUIDs, p.UUID)
-                                }</span>
+                                        if _, exists := selectedUUIDSet[p.UUID]; !exists </span><span class="cov0" title="0">{
+                                                selectedUUIDSet[p.UUID] = struct{}{}
+                                                allSelectedUUIDs = append(allSelectedUUIDs, p.UUID)
+                                        }</span>
+                                }
                         }
                         <span class="cov0" title="0">if p.FreeText != "" </span><span class="cov0" title="0">{
                                 freeTexts = append(freeTexts, p.FreeText)
@@ -14717,12 +14727,55 @@ func (h *SaveBulkKuesionerJawabanCommandHandler) Handle(
                         }
                 }
 
-                <span class="cov0" title="0">jawabanList, err := h.RepoJawaban.GetByUUIDs(ctx, selectedUUIDs)
+                <span class="cov0" title="0">rawItems = append(rawItems, rawItemData{
+                        pertanyaanUUID: pertanyaanUUID,
+                        raw:            raw,
+                        selectedUUIDs:  selectedUUIDs,
+                        freeTexts:      freeTexts,
+                        freeTextMap:    freeTextMap,
+                })</span>
+        }
+
+        // Batch lookup jawaban across all items
+        <span class="cov0" title="0">jawabanLookup := make(map[string]domainjawaban.TemplateJawaban)
+        if len(allSelectedUUIDs) &gt; 0 </span><span class="cov0" title="0">{
+                if batchJawaban, err := h.RepoJawaban.GetByUUIDs(ctx, allSelectedUUIDs); err == nil </span><span class="cov0" title="0">{
+                        for _, j := range batchJawaban </span><span class="cov0" title="0">{
+                                jawabanLookup[j.UUID.String()] = j
+                        }</span>
+                }
+        }
+
+        <span class="cov0" title="0">processedItems := make([]ProcessedItem, 0, len(rawItems))
+        for _, rawItem := range rawItems </span><span class="cov0" title="0">{
+                pertanyaan, err := h.RepoPertanyaan.GetByUuid(ctx, rawItem.pertanyaanUUID)
                 if err != nil </span><span class="cov0" title="0">{
                         continue</span>
                 }
 
-                <span class="cov0" title="0">selectedMap := map[uint]bool{}
+                <span class="cov0" title="0">var jawabanList []domainjawaban.TemplateJawaban
+                if len(rawItem.selectedUUIDs) &gt; 0 </span><span class="cov0" title="0">{
+                        allFound := true
+                        for _, u := range rawItem.selectedUUIDs </span><span class="cov0" title="0">{
+                                if _, ok := jawabanLookup[u]; !ok </span><span class="cov0" title="0">{
+                                        allFound = false
+                                        break</span>
+                                }
+                        }
+                        <span class="cov0" title="0">if allFound </span><span class="cov0" title="0">{
+                                for _, u := range rawItem.selectedUUIDs </span><span class="cov0" title="0">{
+                                        jawabanList = append(jawabanList, jawabanLookup[u])
+                                }</span>
+                        } else<span class="cov0" title="0"> {
+                                var err error
+                                jawabanList, err = h.RepoJawaban.GetByUUIDs(ctx, rawItem.selectedUUIDs)
+                                if err != nil </span><span class="cov0" title="0">{
+                                        continue</span>
+                                }
+                        }
+                }
+
+                <span class="cov0" title="0">selectedMap := make(map[uint]bool, len(jawabanList))
                 for _, j := range jawabanList </span><span class="cov0" title="0">{
                         selectedMap[j.ID] = true
                 }</span>
@@ -14733,8 +14786,8 @@ func (h *SaveBulkKuesionerJawabanCommandHandler) Handle(
                         Pertanyaan:   pertanyaan,
                         JawabanList:  jawabanList,
                         FreeTemplate: freeTemplate,
-                        FreeTexts:    freeTexts,
-                        FreeTextMap:  freeTextMap,
+                        FreeTexts:    rawItem.freeTexts,
+                        FreeTextMap:  rawItem.freeTextMap,
                         SelectedMap:  selectedMap,
                 })</span>
         }
@@ -14765,13 +14818,21 @@ func (h *SaveBulkKuesionerJawabanCommandHandler) Handle(
 
         <span class="cov0" title="0">repoWithTx := h.RepoJawabanKuesioner.WithTx(tx)
 
-        for _, item := range processedItems </span><span class="cov0" title="0">{
-                existing, err := repoWithTx.GetByPertanyaanAndUser(ctx, item.Pertanyaan.ID, cmd.SID, cmd.Resource)
-                if err != nil </span><span class="cov0" title="0">{
-                        return "", err
-                }</span>
+        // Fetch all existing answers for this questionnaire and user in ONE query!
+        allExisting, err := repoWithTx.GetByKuesionerAndUser(ctx, kuesioner.ID, cmd.SID, cmd.Resource)
+        if err != nil </span><span class="cov0" title="0">{
+                return "", err
+        }</span>
 
-                <span class="cov0" title="0">existingMap := map[uint]domainkuesioner.KuesionerJawaban{}
+        <span class="cov0" title="0">existingByPertanyaan := make(map[uint][]domainkuesioner.KuesionerJawaban)
+        for _, v := range allExisting </span><span class="cov0" title="0">{
+                existingByPertanyaan[v.IdTemplatePertanyaan] = append(existingByPertanyaan[v.IdTemplatePertanyaan], v)
+        }</span>
+
+        <span class="cov0" title="0">for _, item := range processedItems </span><span class="cov0" title="0">{
+                existing := existingByPertanyaan[item.Pertanyaan.ID]
+
+                existingMap := map[uint]domainkuesioner.KuesionerJawaban{}
                 var existingFree []domainkuesioner.KuesionerJawaban
 
                 for _, v := range existing </span><span class="cov0" title="0">{
@@ -15008,7 +15069,7 @@ func (h *SaveKuesionerJawabanCommandHandler) Handle(
         // ===============================
         <span class="cov0" title="0">existing, err := h.RepoJawabanKuesioner.
                 WithTx(tx).
-                GetByPertanyaanAndUser(ctx, pertanyaan.ID, cmd.SID, cmd.Resource)
+                GetByPertanyaanAndUser(ctx, kuesioner.ID, pertanyaan.ID, cmd.SID, cmd.Resource)
 
         if err != nil </span><span class="cov0" title="0">{
                 return "", err
@@ -15543,8 +15604,24 @@ func (r *KuesionerJawabanRepository) BeginTx(ctx context.Context) (*gorm.DB, err
 // ===============================
 // READ / WRITE
 // ===============================
+func (r *KuesionerJawabanRepository) GetByKuesionerAndUser(
+        ctx context.Context,
+        idKuesioner uint,
+        sid string,
+        resource string,
+) ([]domainkuesioner.KuesionerJawaban, error) <span class="cov0" title="0">{
+
+        var list []domainkuesioner.KuesionerJawaban
+        err := r.db.WithContext(ctx).
+                Where("id_kuesioner = ? AND createdByRef = ? AND createdBy = ?", idKuesioner, sid, resource).
+                Find(&amp;list).Error
+
+        return list, err
+}</span>
+
 func (r *KuesionerJawabanRepository) GetByPertanyaanAndUser(
         ctx context.Context,
+        idKuesioner uint,
         pertanyaanID uint,
         sid string,
         resource string,
@@ -15552,7 +15629,7 @@ func (r *KuesionerJawabanRepository) GetByPertanyaanAndUser(
 
         var list []domainkuesioner.KuesionerJawaban
         err := r.db.WithContext(ctx).
-                Where("id_template_pertanyaan = ? AND createdByRef = ? AND createdBy = ?", pertanyaanID, sid, resource).
+                Where("id_kuesioner = ? AND id_template_pertanyaan = ? AND createdByRef = ? AND createdBy = ?", idKuesioner, pertanyaanID, sid, resource).
                 Find(&amp;list).Error
 
         return list, err
